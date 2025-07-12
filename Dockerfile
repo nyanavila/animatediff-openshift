@@ -20,8 +20,8 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
 # Set the working directory
 WORKDIR /app
 
-# Clone the official repository to get the 'wan' library
-RUN git clone https://github.com/alibaba/i2vgen-xl.git
+# Clone the official repository to get the 'wan' library using the git protocol
+RUN git clone git://github.com/ali-vilab/VGen.git
 
 # Copy our custom requirements file
 COPY ./requirements.txt /app/
