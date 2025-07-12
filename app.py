@@ -1,144 +1,133 @@
 import gradio as gr
 import torch
-from diffusers import AnimateDiffPipeline, MotionAdapter, EulerDiscreteScheduler
-from diffusers.utils import export_to_gif
-from huggingface_hub import hf_hub_download
-from safetensors.torch import load_file
 import os
+import sys
+import gc
 import uuid
+from huggingface_hub import snapshot_download
+
+# The 'wan' library is now in the same directory, so we can import it directly.
+import wan
+from wan.configs import MAX_AREA_CONFIGS, WAN_CONFIGS
 
 # --- Configuration ---
+# We use a single data directory on our persistent volume
 DATA_DIR = "/app/data"
+MODELS_DIR = os.path.join(DATA_DIR, "models")
 VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
-# Set environment variables to use a writable cache directory on our persistent volume
-os.environ['HF_HOME'] = os.path.join(DATA_DIR, "huggingface_cache")
-os.environ['MPLCONFIGDIR'] = "/tmp/matplotlib"
+MODEL_ID = "Wan-AI/Wan2.1-T2V-14B-Diffusers"
+MODEL_PATH = os.path.join(MODELS_DIR, MODEL_ID.split('/')[-1])
 
-# --- Model Configuration ---
-device = "cuda"
-dtype = torch.float16
-base_model_id = "emilianJR/epiCRealism"
-repo_id = "ByteDance/AnimateDiff-Lightning"
+# --- Global variable for the loaded model ---
+wan_i2v_model = None
 
-# --- Global variable for the loaded pipeline ---
-pipe = None
+# --- Startup: Download model if it doesn't exist ---
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        print(f"Model not found at {MODEL_PATH}, downloading from Hugging Face...")
+        os.makedirs(MODEL_PATH, exist_ok=True)
+        snapshot_download(
+            repo_id=MODEL_ID,
+            local_dir=MODEL_PATH,
+            local_dir_use_symlinks=False,
+            ignore_patterns=["*.pt", "*.pth", "*i2v-1.3B*"]
+        )
+        print("Model download complete.")
+    else:
+        print(f"Model found at {MODEL_PATH}.")
 
 # --- Startup: Load the model into memory ---
-def load_pipeline(steps):
-    global pipe
-    print(f"Loading AnimateDiff Lightning {steps}-step model...")
-    
+def load_model():
+    global wan_i2v_model
+    if wan_i2v_model is not None:
+        print("Model is already loaded.")
+        return
+
+    print("Loading Wan-AI 14B-720P model...")
     try:
-        adapter_ckpt = f"animatediff_lightning_{steps}step_diffusers.safetensors"
-        motion_adapter_path = hf_hub_download(repo_id, adapter_ckpt)
-        
-        adapter = MotionAdapter.from_pretrained(repo_id, torch_dtype=dtype)
-        adapter.load_state_dict(load_file(motion_adapter_path, device=device))
-        
-        pipe = AnimateDiffPipeline.from_pretrained(
-            base_model_id,
-            motion_adapter=adapter,
-            torch_dtype=dtype
-        ).to(device)
-        
-        pipe.scheduler = EulerDiscreteScheduler.from_config(
-            pipe.scheduler.config, timestep_spacing="trailing", beta_schedule="linear"
+        cfg = WAN_CONFIGS['i2v-14B']
+        wan_i2v_model = wan.WanI2V(
+            config=cfg,
+            checkpoint_dir=MODEL_PATH,
+            device_id=0, rank=0, t5_fsdp=False, dit_fsdp=False, use_usp=False
         )
         print("Model loaded successfully.")
-        return f"Model loaded: {steps}-step"
     except Exception as e:
         print(f"❌ FAILED TO LOAD MODEL: {e}")
-        # Use raise gr.Error() to display the error in the Gradio UI
-        raise gr.Error(f"Failed to load model: {e}")
+        raise
 
 # --- Main Generation Function ---
-def generate_animation(prompt, steps, guidance_scale):
-    if pipe is None:
-        raise gr.Error("Model is not loaded. Please select a model version from the dropdown first.")
-    if not prompt:
-        raise gr.Error("Prompt cannot be empty.")
+def i2v_generation(img2vid_image, img2vid_prompt, n_prompt, sd_steps, guide_scale, shift_scale, seed):
+    if wan_i2v_model is None:
+        raise gr.Error("Model is not loaded. Please wait for the application to start.")
+    if img2vid_image is None:
+        raise gr.Error("Please upload an input image.")
 
-    print(f"Generating video for prompt: '{prompt}' with {steps} steps.")
+    print(f"Generating video for prompt: '{img2vid_prompt}'")
     
     try:
-        output = pipe(
-            prompt=prompt,
-            guidance_scale=guidance_scale,
-            num_inference_steps=steps
+        video_tensor = wan_i2v_model.generate(
+            img2vid_prompt,
+            img2vid_image,
+            max_area=MAX_AREA_CONFIGS['720*1280'],
+            shift=shift_scale,
+            sampling_steps=sd_steps,
+            guide_scale=guide_scale,
+            n_prompt=n_prompt,
+            seed=seed,
+            offload_model=True
         )
-        frames = output.frames[0]
 
         os.makedirs(VIDEOS_DIR, exist_ok=True)
-        filename = f"{uuid.uuid4()}.gif"
+        filename = f"{uuid.uuid4()}.mp4"
         output_path = os.path.join(VIDEOS_DIR, filename)
         
-        export_to_gif(frames, output_path)
-        
-        print(f"Animation saved to persistent storage at: {output_path}")
+        wan.utils.utils.cache_video(
+            tensor=video_tensor[None],
+            save_file=output_path,
+            fps=16,
+            nrow=1,
+            normalize=True,
+            value_range=(-1, 1)
+        )
+        print(f"Video saved to persistent storage at: {output_path}")
         return output_path
     except Exception as e:
         print(f"An error occurred during generation: {e}")
-        raise gr.Error(f"Failed to generate animation. Error: {e}")
+        raise gr.Error(f"Failed to generate video. Error: {e}")
 
 # --- Gradio Interface ---
-with gr.Blocks() as demo:
-    gr.Markdown("<div style='text-align: center; font-size: 32px; font-weight: bold;'>AnimateDiff Lightning</div>")
-    
-    with gr.Row():
-        with gr.Column(scale=1):
-            gr.Markdown("### Configuration")
-            
-            model_steps = gr.Dropdown(
-                label="Model Version (Steps)",
-                choices=[1, 2, 4, 8],
-                value=4,
-                info="Select the model version. Higher steps can improve quality but may be slower."
-            )
-            
-            status_box = gr.Textbox(label="Model Status", value="Not loaded", interactive=False)
+def gradio_interface():
+    with gr.Blocks() as demo:
+        gr.Markdown("<div style='text-align: center; font-size: 32px; font-weight: bold;'>Wan2.1 (I2V-14B)</div>")
+        
+        with gr.Row():
+            with gr.Column():
+                img2vid_image = gr.Image(type="pil", label="Upload Input Image")
+                img2vid_prompt = gr.Textbox(label="Prompt", placeholder="Describe the video you want to generate")
+                
+                with gr.Accordion("Advanced Options", open=True):
+                    n_prompt = gr.Textbox(label="Negative Prompt", value="worst quality, low quality, blurry")
+                    sd_steps = gr.Slider(label="Diffusion Steps", minimum=1, maximum=100, value=50, step=1)
+                    guide_scale = gr.Slider(label="Guide Scale", minimum=0, maximum=20, value=5.0, step=0.1)
+                    shift_scale = gr.Slider(label="Shift Scale", minimum=0, maximum=10, value=5.0, step=0.1)
+                    seed = gr.Slider(label="Seed", minimum=-1, maximum=2147483647, step=1, value=-1)
+                
+                run_i2v_button = gr.Button("Generate Video")
 
-            prompt_input = gr.Textbox(
-                label="Prompt", 
-                placeholder="A girl smiling",
-                lines=3
-            )
-            
-            with gr.Accordion("Advanced Options", open=False):
-                guidance_scale = gr.Slider(
-                    label="Guidance Scale", 
-                    minimum=1.0, 
-                    maximum=5.0, 
-                    value=1.0, 
-                    step=0.1,
-                    info="Lower values give the model more creative freedom."
-                )
+            with gr.Column():
+                result_gallery = gr.Video(label='Generated Video', interactive=False, height=600)
 
-            submit_btn = gr.Button("Generate Animation", variant="primary")
+        run_i2v_button.click(
+            fn=i2v_generation,
+            inputs=[img2vid_image, img2vid_prompt, n_prompt, sd_steps, guide_scale, shift_scale, seed],
+            outputs=[result_gallery]
+        )
+    return demo
 
-        with gr.Column(scale=2):
-            gr.Markdown("### Generated Animation")
-            output_video = gr.Video(label="Result", interactive=False, height=512)
-
-    # When the dropdown changes, load the corresponding model
-    model_steps.change(
-        fn=load_pipeline,
-        inputs=[model_steps],
-        outputs=[status_box]
-    )
-    
-    # When the button is clicked, generate the animation
-    submit_btn.click(
-        fn=generate_animation,
-        inputs=[prompt_input, model_steps, guidance_scale],
-        outputs=[output_video]
-    )
-    
-    # Load the default model when the app starts
-    demo.load(
-        fn=load_pipeline,
-        inputs=[model_steps],
-        outputs=[status_box]
-    )
-
-if __name__ == "__main__":
+# --- Main Execution Block ---
+if __name__ == '__main__':
+    download_model()
+    load_model()
+    demo = gradio_interface()
     demo.launch(server_name="0.0.0.0", share=False, server_port=7860)
