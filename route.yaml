@@ -1,0 +1,19 @@
+# kubernetes/route.yaml
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: animatediff-route
+  labels:
+    app: animatediff-lightning
+spec:
+  to:
+    kind: Service
+    name: animatediff-service
+    weight: 100
+  port:
+    # This must match the service's port (not the targetPort)
+    targetPort: 80
+  tls:
+    # This enables HTTPS for your route
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
