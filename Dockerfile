@@ -1,31 +1,37 @@
-# Use a stable NVIDIA CUDA runtime image
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+# Use a newer NVIDIA CUDA runtime image to support torch>=2.4.0
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
-# Set environment variables to avoid interactive prompts
+# Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
+ENV MPLCONFIGDIR=/tmp/matplotlib
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
+# Install system dependencies, including git
 RUN apt-get update && apt-get install -y \
     python3.10 python3.10-dev python3-pip \
-    ffmpeg \
+    git build-essential cmake curl unzip ffmpeg \
+    libsm6 libxext6 libgl1-mesa-glx ninja-build \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Make python3.10 the default python
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
 
-# Set the working directory inside the container
+# Set the working directory
 WORKDIR /app
 
-# Copy the requirements file first to leverage Docker layer caching
+# Clone the official repository to get the 'wan' library
+RUN git clone https://github.com/alibaba/i2vgen-xl.git
+
+# Copy our custom requirements file
 COPY ./requirements.txt /app/
 
-# Upgrade pip and install Python libraries from requirements.txt
+# Install Python libraries and immediately clean up the cache to save space
 RUN python -m pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install -r requirements.txt && \
+    rm -rf /root/.cache/pip
 
-# Copy the application code into the container
+# Copy our custom application script
 COPY ./app.py /app/
 
 # Expose the port Gradio will run on
