@@ -1,0 +1,15 @@
+# kubernetes/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: animatediff-pvc
+  labels:
+    app: animatediff-lightning
+spec:
+  # This specifies that the volume can be mounted as read-write by a single pod.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    # This requests 10 Gigabytes of storage for videos and model caches.
+    requests:
+      storage: 10Gi
