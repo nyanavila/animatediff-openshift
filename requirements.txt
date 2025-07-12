@@ -1,0 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.1.0+cu118
+torchvision==0.16.0+cu118
+torchaudio==2.1.0+cu118
+diffusers==0.27.2
+transformers==4.40.1
+accelerate==0.29.3
+gradio==3.41.2
+huggingface-hub
+safetensors
+imageio
+imageio-ffmpeg
+opencv-python
+matplotlib
