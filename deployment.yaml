@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: animatediff-app
+  labels:
+    app: animatediff-lightning
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: animatediff-lightning
+  template:
+    metadata:
+      labels:
+        app: animatediff-lightning
+    spec:
+      volumes:
+        # Defines a volume that will use our PersistentVolumeClaim
+        - name: video-storage
+          persistentVolumeClaim:
+            claimName: animatediff-pvc
+      containers:
+      - name: animatediff-container
+        # Make sure to build and push an image with this tag
+        image: quay.io/navila/animatediff:v3.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 7860
+        # Mounts the persistent volume into the container at /app/data
+        volumeMounts:
+        - name: video-storage
+          mountPath: /app/data
+        # Request a GPU for the pod
+        resources:
+          limits:
+            nvidia.com/gpu: "1"
+          requests:
+            nvidia.com/gpu: "1"
+      # Add a toleration to allow scheduling on dedicated GPU nodes
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
