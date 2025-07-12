@@ -1,38 +1,32 @@
-# Use a newer NVIDIA CUDA runtime image to support torch>=2.4.0
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+# Use a stable NVIDIA CUDA runtime image
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
-# Set environment variables
+# Set environment variables to avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
-ENV MPLCONFIGDIR=/tmp/matplotlib
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies, including git
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3.10 python3.10-dev python3-pip \
-    git build-essential cmake curl unzip ffmpeg \
-    libsm6 libxext6 libgl1-mesa-glx ninja-build \
+    ffmpeg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Make python3.10 the default python
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
 
-# Set the working directory
+# Set the working directory inside the container
 WORKDIR /app
 
-# The git clone command has been removed.
-# We will copy the code directly from your repository.
-
-# Copy our custom requirements file
+# Copy the requirements file first to leverage Docker layer caching
 COPY ./requirements.txt /app/
 
-# Install Python libraries and immediately clean up the cache to save space
+# Upgrade pip and install Python libraries from requirements.txt
 RUN python -m pip install --upgrade pip && \
-    pip install -r requirements.txt && \
-    rm -rf /root/.cache/pip
+    pip install -r requirements.txt
 
-# Copy the entire project content (including app.py and the 'wan' directory)
-COPY . /app/
+# Copy the application code into the container
+COPY ./app.py /app/
 
 # Expose the port Gradio will run on
 EXPOSE 7860
