@@ -20,8 +20,8 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
 # Set the working directory
 WORKDIR /app
 
-# Clone the official repository to get the 'wan' library using the git protocol
-RUN git clone git://github.com/ali-vilab/VGen.git
+# The git clone command has been removed.
+# We will copy the code directly from your repository.
 
 # Copy our custom requirements file
 COPY ./requirements.txt /app/
@@ -31,8 +31,8 @@ RUN python -m pip install --upgrade pip && \
     pip install -r requirements.txt && \
     rm -rf /root/.cache/pip
 
-# Copy our custom application script
-COPY ./app.py /app/
+# Copy the entire project content (including app.py and the 'wan' directory)
+COPY . /app/
 
 # Expose the port Gradio will run on
 EXPOSE 7860
